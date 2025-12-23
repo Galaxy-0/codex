@@ -68,6 +68,7 @@ impl SessionTask for UserShellCommandTask {
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
+
         // Fix for Issue #8472: On macOS, System Integrity Protection (SIP) strips DYLD_* environment
         // variables when spawning restricted binaries (like /bin/sh or /bin/zsh).
         // This means setting them via `Command::env` is ineffective for the child shell.
@@ -76,9 +77,22 @@ impl SessionTask for UserShellCommandTask {
         let command_str = {
             let cmd = self.command.clone();
             let mut exports = String::new();
+
+            // 1. Capture explicitly configured variables
             for (key, value) in &turn_context.shell_environment_policy.set {
                 if key.starts_with("DYLD_") {
-                    // Simple escaping: wrap in single quotes, escape existing single quotes.
+                    let escaped_val = value.replace("'", "'\\''");
+                    use std::fmt::Write;
+                    let _ = write!(exports, "export {}='{}'; ", key, escaped_val);
+                }
+            }
+
+            // 2. Capture inherited variables from the current process environment
+            // This is critical because normal inheritance is blocked by SIP for DYLD_* vars.
+            for (key, value) in std::env::vars() {
+                if key.starts_with("DYLD_")
+                    && !turn_context.shell_environment_policy.set.contains_key(&key)
+                {
                     let escaped_val = value.replace("'", "'\\''");
                     use std::fmt::Write;
                     let _ = write!(exports, "export {}='{}'; ", key, escaped_val);
